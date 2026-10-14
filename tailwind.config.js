@@ -37,9 +37,38 @@ export default {
           400: '#CEC7BC',
           500: '#B8AFA2',
         },
+        // "Ledger" design system tokens (see design_handoff_crm/README.md).
+        // Kept separate from the legacy navy/crimson/surface scale above so
+        // screens can be reskinned one at a time without shifting colors on
+        // screens that haven't been touched yet.
+        ledger: {
+          navy: '#0A1A3C',
+          navyHover: '#132868',
+          crimson: '#CF1B3C',
+          crimsonDeep: '#B01633',
+          paper: '#FBFAF7',
+          zebra: '#F6F4EF',
+          rowHover: '#F2EFE8',
+          hairline: '#DDD9D0',
+          hairline2: '#EDEAE3',
+          navInactive: '#8FA1C4',
+          body: '#3D4451',
+          mid: '#565C66',
+          soft: '#5A6068',
+          faint: '#616770',
+          muted: '#8E8B84',
+          green: '#0F6B4F',
+          amber: '#8A5A12',
+          blue: '#1F3D7A',
+          gray: '#5A6068',
+        },
       },
       fontFamily: {
         sans: ['-apple-system', 'BlinkMacSystemFont', '"SF Pro Display"', '"Segoe UI"', 'system-ui', 'sans-serif'],
+        serifLedger: ['"Instrument Serif"', 'Georgia', 'serif'],
+        plexSans: ['"IBM Plex Sans"', '-apple-system', 'sans-serif'],
+        plexMono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        geist: ['Geist', '-apple-system', 'sans-serif'],
       },
       fontSize: {
         '2xs': ['0.625rem', { lineHeight: '0.875rem' }],
@@ -48,6 +77,7 @@ export default {
         'card': '0 1px 3px 0 rgba(0,0,0,0.06), 0 1px 2px -1px rgba(0,0,0,0.04)',
         'card-hover': '0 4px 12px 0 rgba(0,0,0,0.08), 0 2px 6px -1px rgba(0,0,0,0.06)',
         'modal': '0 20px 60px 0 rgba(0,0,0,0.18), 0 8px 24px -4px rgba(0,0,0,0.12)',
+        'ledger-frame': '0 24px 60px -20px rgba(0,0,0,0.55)',
       },
       borderRadius: {
         'xl': '0.75rem',

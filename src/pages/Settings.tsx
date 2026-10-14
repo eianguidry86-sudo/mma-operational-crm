@@ -1,5 +1,6 @@
 import Header from '../components/layout/Header';
-import { Settings as SettingsIcon, User, Building2, Bell, Shield, Link, Puzzle } from 'lucide-react';
+import { Settings as SettingsIcon, User, Building2, Bell, Shield, Puzzle, LogOut } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const FUTURE_INTEGRATIONS = [
   { name: 'QuickBooks', desc: 'Sync invoices and financial data', icon: '📊', status: 'Coming Soon' },
@@ -12,6 +13,8 @@ const FUTURE_INTEGRATIONS = [
 ];
 
 export default function Settings() {
+  const { user, signOut } = useAuth();
+
   return (
     <div className="flex-1 flex flex-col">
       <Header title="Settings" subtitle="Platform configuration" />
@@ -95,18 +98,28 @@ export default function Settings() {
               <h3 className="text-sm font-semibold text-navy-900">Security & Access</h3>
             </div>
             <div className="space-y-3">
+              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+                <div className="text-xs font-semibold text-emerald-700 mb-0.5">Signed in as</div>
+                <div className="text-xs text-emerald-600">{user?.email ?? 'Unknown'}</div>
+              </div>
               <div className="p-3 bg-surface-50 rounded-lg border border-surface-200">
-                <div className="text-xs font-semibold text-navy-700 mb-0.5">Role-Based Access Control</div>
-                <div className="text-xs text-navy-400">Planned for team expansion. Currently single-admin mode.</div>
+                <div className="text-xs font-semibold text-navy-700 mb-0.5">Access Model</div>
+                <div className="text-xs text-navy-400">Every signed-in teammate has full read/write access. No per-role restrictions yet.</div>
+              </div>
+              <div className="p-3 bg-surface-50 rounded-lg border border-surface-200">
+                <div className="text-xs font-semibold text-navy-700 mb-0.5">Adding teammates</div>
+                <div className="text-xs text-navy-400">Add accounts from the Supabase Dashboard under Authentication → Users. There's no public sign-up page.</div>
               </div>
               <div className="p-3 bg-surface-50 rounded-lg border border-surface-200">
                 <div className="text-xs font-semibold text-navy-700 mb-0.5">Data Encryption</div>
                 <div className="text-xs text-navy-400">All data encrypted at rest via Supabase.</div>
               </div>
-              <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
-                <div className="text-xs font-semibold text-emerald-700 mb-0.5">Database Status</div>
-                <div className="text-xs text-emerald-600">Connected · Supabase PostgreSQL</div>
-              </div>
+              <button
+                onClick={() => { if (confirm('Sign out?')) signOut(); }}
+                className="w-full flex items-center justify-center gap-1.5 text-xs font-semibold text-navy-700 border border-surface-200 rounded-lg py-2 hover:bg-surface-50 transition-colors"
+              >
+                <LogOut size={13} /> Sign Out
+              </button>
             </div>
           </div>
         </div>
@@ -143,8 +156,8 @@ export default function Settings() {
               { label: 'Version', value: '1.0.0' },
               { label: 'Stack', value: 'React + TypeScript + Supabase' },
               { label: 'Database', value: 'PostgreSQL via Supabase' },
-              { label: 'Auth', value: 'Supabase Auth (ready)' },
-              { label: 'Architecture', value: 'Multi-role ready' },
+              { label: 'Auth', value: 'Supabase Auth (email + password)' },
+              { label: 'Architecture', value: 'Single access tier — all signed-in users' },
             ].map(({ label, value }) => (
               <div key={label}>
                 <div className="text-navy-400 font-semibold uppercase tracking-wide mb-0.5">{label}</div>

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Project, Client, ProjectStatus, WaitingOn, DataChecklist } from '../types';
-import Header from '../components/layout/Header';
+import TitleBand from '../components/ledger/TitleBand';
 import Modal from '../components/ui/Modal';
 import Badge, { getProjectStatusBadge } from '../components/ui/Badge';
-import { Plus, Search, Filter, CheckSquare, Calendar, AlertCircle } from 'lucide-react';
+import { CheckSquare, ArrowRight } from 'lucide-react';
 import ProjectSnapshot from './ProjectSnapshot';
 const PROJECT_STATUSES: ProjectStatus[] = [
   'Project Acceptance', 'Data Acquisition / Validation', 'Analysis', 'Analysis QC',
@@ -42,12 +42,26 @@ const CHECKLIST_LABELS: Record<keyof DataChecklist, string> = {
   additional_sources_acquired: 'Additional Sources Acquired',
 };
 
+const STAGE_DOT: Record<string, { dot: string; text: string }> = {
+  'Project Acceptance': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Data Acquisition / Validation': { dot: 'bg-ledger-amber', text: 'text-ledger-amber' },
+  'Analysis': { dot: 'bg-ledger-amber', text: 'text-ledger-amber' },
+  'Analysis QC': { dot: 'bg-ledger-amber', text: 'text-ledger-amber' },
+  'Report Generation': { dot: 'bg-ledger-navy', text: 'text-ledger-navy' },
+  'Final Product QC': { dot: 'bg-ledger-navy', text: 'text-ledger-navy' },
+  'Delivery': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'Completed': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'On Hold': { dot: 'bg-ledger-gray', text: 'text-ledger-gray' },
+};
+
+type DeliveryFilterKey = 'all' | 'blocked' | 'overdue' | 'qc';
+
 export default function Projects() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [filter, setFilter] = useState<DeliveryFilterKey>('all');
   const [selected, setSelected] = useState<Project | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<Partial<Project>>(emptyProject());
@@ -139,118 +153,168 @@ export default function Projects() {
 
   const set = (k: keyof Project, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-  const filtered = projects.filter(p => {
-    const matchSearch = !search ||
-      p.project_name.toLowerCase().includes(search.toLowerCase()) ||
-      (p.clients?.business_name ?? '').toLowerCase().includes(search.toLowerCase());
-    const matchStatus = statusFilter === 'all' || p.status === statusFilter;
-    return matchSearch && matchStatus;
-  });
-
-  const isOverdue = (p: Project) => p.due_date && new Date(p.due_date) < new Date() && p.status !== 'Completed';
+  const isOverdue = (p: Project) => !!p.due_date && new Date(p.due_date) < new Date() && p.status !== 'Completed';
 
   const checklistProgress = (checklist: DataChecklist) => {
     const vals = Object.values(checklist);
     return { done: vals.filter(Boolean).length, total: vals.length };
   };
 
+  const activeProjects = projects.filter(p => p.status !== 'Completed');
+  const blockedProjects = activeProjects.filter(p => !!p.waiting_on);
+  const overdueProjects = activeProjects.filter(isOverdue);
+  const qcProjects = activeProjects.filter(p => p.status === 'Analysis QC' || p.status === 'Final Product QC');
+
+  const tabs: { key: DeliveryFilterKey; label: string; rows: Project[] }[] = [
+    { key: 'all', label: 'All', rows: activeProjects },
+    { key: 'blocked', label: 'Blocked', rows: blockedProjects },
+    { key: 'overdue', label: 'Overdue', rows: overdueProjects },
+    { key: 'qc', label: 'In QC', rows: qcProjects },
+  ];
+
+  const tabRows = tabs.find(t => t.key === filter)?.rows ?? activeProjects;
+  const filtered = search
+    ? tabRows.filter(p =>
+        p.project_name.toLowerCase().includes(search.toLowerCase()) ||
+        (p.clients?.business_name ?? '').toLowerCase().includes(search.toLowerCase())
+      )
+    : tabRows;
+
   if (viewingSnapshot) {
     return <ProjectSnapshot projectId={viewingSnapshot} onBack={() => setViewingSnapshot(null)} />;
   }
 
   return (
-    <div className="flex-1 flex flex-col">
-      <Header
-        title="Projects"
-        subtitle={`${projects.filter(p => p.status !== 'Completed').length} active`}
-        actions={
-          <button onClick={openNew} className="btn-primary py-1.5 px-3 text-xs">
-            <Plus size={14} /> New Project
-          </button>
-        }
+    <>
+      <TitleBand
+        breadcrumb="Delivery / Projects"
+        title="Delivery"
+        stats={[
+          { label: 'Active', value: activeProjects.length.toString() },
+          { label: 'Blocked', value: blockedProjects.length.toString(), tone: blockedProjects.length > 0 ? 'crimson' : 'default' },
+        ]}
+        actionLabel="New project"
+        onAction={openNew}
       />
 
-      <div className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
-        <div className="flex items-center gap-3">
-          <div className="relative max-w-xs flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-400" />
-            <input className="form-input pl-9 py-1.5 text-xs" placeholder="Search projects..." value={search} onChange={e => setSearch(e.target.value)} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Filter size={13} className="text-navy-400" />
-            <select className="form-select py-1.5 text-xs w-52" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="all">All Statuses</option>
-              {PROJECT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {/* Filter tabs */}
+        <div className="flex-shrink-0 flex items-center gap-6 px-7 border-b border-ledger-hairline bg-white">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setFilter(t.key)}
+              className={`relative py-3 font-plexMono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                filter === t.key ? 'text-ledger-navy' : 'text-ledger-muted hover:text-ledger-navy'
+              }`}
+            >
+              {t.label} {t.rows.length}
+              {filter === t.key && <span className="absolute left-0 right-0 -bottom-px h-[2px] bg-ledger-crimson" />}
+            </button>
+          ))}
+
+          <div className="flex-1" />
+
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search delivery…"
+            className="w-44 bg-transparent font-plexSans text-[12px] text-ledger-navy placeholder-ledger-muted border-b border-transparent focus:border-ledger-navy focus:outline-none py-3"
+          />
         </div>
 
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center text-navy-400 text-sm">Loading projects...</div>
-        ) : (
-          <div className="card overflow-hidden">
-            <table className="w-full">
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-48 text-ledger-muted font-plexMono text-xs uppercase tracking-widest">
+              Loading…
+            </div>
+          ) : (
+            <table className="w-full border-collapse">
               <thead>
-                <tr>
-                  <th className="table-header">Project</th>
-                  <th className="table-header">Client</th>
-                  <th className="table-header">Service</th>
-                  <th className="table-header">Status</th>
-                  <th className="table-header">Waiting On</th>
-                  <th className="table-header">Due Date</th>
-                  <th className="table-header">Data</th>
-                  <th className="table-header w-10"></th>
+                <tr className="border-b border-ledger-hairline">
+                  {['Project', 'Service', 'Stage', 'Waiting on', 'Due', 'Data readiness', ''].map((h, i) => (
+                    <th
+                      key={h || i}
+                      className={`px-4 py-2.5 font-plexMono text-[9px] uppercase tracking-[0.12em] text-ledger-muted font-medium ${
+                        i === 4 ? 'text-right' : 'text-left'
+                      }`}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="table-cell text-center text-navy-400 py-12">No projects found</td></tr>
-                ) : filtered.map(p => {
-                  const badge = getProjectStatusBadge(p.status);
+                  <tr>
+                    <td colSpan={7} className="text-center py-16 font-plexMono text-[10px] uppercase tracking-[0.14em] text-ledger-muted">
+                      No projects match this filter
+                    </td>
+                  </tr>
+                ) : filtered.map((p, idx) => {
+                  const stage = STAGE_DOT[p.status] ?? STAGE_DOT['Project Acceptance'];
                   const prog = checklistProgress(p.data_checklist);
                   const overdue = isOverdue(p);
                   return (
-                    <tr key={p.id} className="hover:bg-surface-50 transition-colors cursor-pointer" onClick={() => openDetail(p)}>
-                      <td className="table-cell">
-                        <div className="flex items-center gap-2">
-                          {overdue && <AlertCircle size={13} className="text-crimson-500 flex-shrink-0" />}
-                          <div className="font-medium text-navy-800">{p.project_name}</div>
+                    <tr
+                      key={p.id}
+                      onClick={() => openDetail(p)}
+                      className={`cursor-pointer border-b border-ledger-hairline2 last:border-b-0 hover:bg-ledger-rowHover transition-colors ${
+                        overdue
+                          ? 'border-l-[3px] border-l-ledger-crimson bg-white'
+                          : `border-l-[3px] border-l-transparent ${idx % 2 === 1 ? 'bg-ledger-zebra' : 'bg-white'}`
+                      }`}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-plexSans text-[13px] font-medium text-ledger-navy">{p.project_name}</div>
+                        <div className="font-plexMono text-[9px] uppercase tracking-[0.08em] text-ledger-muted mt-0.5">
+                          {(p as any).clients?.business_name ?? '—'}
                         </div>
                       </td>
-                      <td className="table-cell text-navy-500 text-xs">{(p as any).clients?.business_name ?? '—'}</td>
-                      <td className="table-cell text-navy-500 text-xs max-w-32 truncate">{p.service_type ?? '—'}</td>
-                      <td className="table-cell"><Badge label={badge.label} variant={badge.variant} /></td>
-                      <td className="table-cell">
-                        {p.waiting_on ? (
-                          <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">{p.waiting_on}</span>
-                        ) : '—'}
+                      <td className="px-4 py-3">
+                        <div className="font-plexSans text-[12px] text-ledger-mid max-w-[160px] truncate">{p.service_type ?? '—'}</div>
                       </td>
-                      <td className={`table-cell text-xs ${overdue ? 'text-crimson-600 font-semibold' : 'text-navy-500'}`}>
-                        {p.due_date ?? '—'}
-                      </td>
-                      <td className="table-cell">
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <div className="w-16 h-1.5 bg-surface-200 rounded-full overflow-hidden">
-                            <div className="h-full bg-navy-600 rounded-full" style={{ width: `${(prog.done / prog.total) * 100}%` }} />
-                          </div>
-                          <span className="text-2xs text-navy-400">{prog.done}/{prog.total}</span>
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${stage.dot}`} />
+                          <span className={`font-plexMono text-[10px] uppercase tracking-[0.08em] ${stage.text}`}>{p.status}</span>
                         </div>
                       </td>
-                      <td className="table-cell">
-                        <button
-                          onClick={e => { e.stopPropagation(); openEdit(p); }}
-                          className="text-navy-400 hover:text-navy-700 transition-colors text-xs px-2 py-1 rounded hover:bg-surface-100"
-                        >
-                          Edit
-                        </button>
+                      <td className="px-4 py-3">
+                        {p.waiting_on ? (
+                          <span className="font-plexMono text-[10px] uppercase tracking-[0.06em] text-ledger-amber">{p.waiting_on}</span>
+                        ) : (
+                          <span className="font-plexMono text-[10px] text-ledger-faint">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className={`font-plexMono text-[11px] tabular-nums ${overdue ? 'font-semibold text-ledger-crimson' : 'text-ledger-faint'}`}>
+                          {p.due_date ?? '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex gap-[3px]">
+                            {Array.from({ length: prog.total }).map((_, i) => (
+                              <span
+                                key={i}
+                                className={`w-[7px] h-[7px] ${i < prog.done ? (prog.done === prog.total ? 'bg-ledger-green' : 'bg-ledger-navy') : 'bg-ledger-hairline2'}`}
+                              />
+                            ))}
+                          </div>
+                          <span className="font-plexMono text-[10px] text-ledger-muted whitespace-nowrap">{prog.done}/{prog.total}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <ArrowRight size={13} className="text-ledger-muted inline-block" />
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Project Detail Modal */}
@@ -421,6 +485,6 @@ export default function Projects() {
           </div>
         </div>
       </Modal>
-    </div>
+    </>
   );
 }

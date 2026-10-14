@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import Sidebar from './components/layout/Sidebar';
+import AppShell from './components/ledger/AppShell';
 import Dashboard from './pages/Dashboard';
 import Leads from './pages/Leads';
 import Clients from './pages/Clients';
@@ -39,11 +39,8 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-surface-100 overflow-hidden">
-      <Sidebar currentPage={currentPage} onNavigate={p => setCurrentPage(p as Page)} />
-      <main className="flex-1 ml-56 flex flex-col min-h-screen overflow-hidden">
-        {renderPage()}
-      </main>
-    </div>
+    <AppShell currentPage={currentPage} onNavigate={p => setCurrentPage(p as Page)}>
+      {renderPage()}
+    </AppShell>
   );
 }

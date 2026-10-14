@@ -74,3 +74,33 @@
     @apply px-4 py-3 text-sm text-navy-800 border-b border-surface-100;
   }
 }
+
+@layer utilities {
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #client-report-print,
+  #client-report-print * {
+    visibility: visible;
+  }
+  #client-report-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+}

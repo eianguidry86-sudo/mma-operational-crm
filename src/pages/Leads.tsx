@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Lead, LeadStage } from '../types';
-import Header from '../components/layout/Header';
+import TitleBand from '../components/ledger/TitleBand';
 import Modal from '../components/ui/Modal';
 import Badge, { getLeadStageBadge } from '../components/ui/Badge';
-import { Plus, ChevronRight, Search, Filter, User, Phone, Mail, DollarSign, Calendar } from 'lucide-react';
+import { ArrowRight, User, Phone, Mail, Calendar } from 'lucide-react';
 
 const ACTIVE_STAGES: LeadStage[] = [
   'New Lead', 'Contacted', 'Discovery Scheduled', 'Discovery Complete',
@@ -16,6 +16,9 @@ const ALL_STAGES: LeadStage[] = [
   ...ACTIVE_STAGES,
   'Proposal Lost', 'No Response', 'Not a Fit', 'Future Opportunity',
 ];
+
+const OPEN_STAGES: LeadStage[] = ACTIVE_STAGES.filter(s => s !== 'Project Created');
+const PROPOSAL_STAGES: LeadStage[] = ['Proposal Drafting', 'Proposal Sent', 'Negotiation', 'Verbal Agreement'];
 
 const OPPORTUNITY_TYPES = [
   'Market Expansion Analysis', 'Competitor Landscape Analysis', 'Site Selection',
@@ -32,16 +35,38 @@ const emptyLead = (): Partial<Lead> => ({
   stage: 'New Lead', notes: '', next_action: '', follow_up_date: '',
 });
 
+type FilterKey = 'all' | 'followup' | 'proposal' | 'won';
+
+const STAGE_DOT: Record<string, { dot: string; text: string }> = {
+  'New Lead': { dot: 'bg-ledger-gray', text: 'text-ledger-gray' },
+  'Contacted': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Discovery Scheduled': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Discovery Complete': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Negotiation': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Verbal Agreement': { dot: 'bg-ledger-blue', text: 'text-ledger-blue' },
+  'Proposal Drafting': { dot: 'bg-ledger-amber', text: 'text-ledger-amber' },
+  'Proposal Sent': { dot: 'bg-ledger-amber', text: 'text-ledger-amber' },
+  'Agreement Signed': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'Invoice Sent': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'Client Onboarding': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'Project Created': { dot: 'bg-ledger-green', text: 'text-ledger-green' },
+  'Proposal Lost': { dot: 'bg-ledger-crimson', text: 'text-ledger-crimson' },
+  'No Response': { dot: 'bg-ledger-gray', text: 'text-ledger-gray' },
+  'Not a Fit': { dot: 'bg-ledger-gray', text: 'text-ledger-gray' },
+  'Future Opportunity': { dot: 'bg-ledger-gray', text: 'text-ledger-gray' },
+};
+
 export default function Leads() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState<string>('all');
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selected, setSelected] = useState<Lead | null>(null);
   const [form, setForm] = useState<Partial<Lead>>(emptyLead());
   const [saving, setSaving] = useState(false);
+  const [converting, setConverting] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'pipeline'>('list');
 
   useEffect(() => { loadLeads(); }, []);
@@ -89,13 +114,60 @@ export default function Leads() {
     if (lead) await logActivity(`Moved lead to ${stage}`, lead.business_name);
   }
 
-  const filtered = leads.filter(l => {
-    const matchSearch = !search ||
-      l.business_name.toLowerCase().includes(search.toLowerCase()) ||
-      (l.contact_name ?? '').toLowerCase().includes(search.toLowerCase());
-    const matchStage = stageFilter === 'all' || l.stage === stageFilter;
-    return matchSearch && matchStage;
-  });
+  async function convertLead(lead: Lead) {
+    if (!confirm(`Convert "${lead.business_name}" to a client account?`)) return;
+    setConverting(lead.id);
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from('clients').insert({
+        business_name: lead.business_name,
+        contact_name: lead.contact_name,
+        email: lead.email,
+        phone: lead.phone,
+        website: lead.website,
+        industry: lead.industry,
+        service_area: lead.service_area,
+        business_size: lead.business_size,
+        notes: lead.notes,
+        status: 'Active',
+        lifetime_value: lead.estimated_deal_value ?? 0,
+        lead_id: lead.id,
+        created_at: now,
+        updated_at: now,
+      });
+      if (error) throw error;
+      await supabase.from('leads').update({ stage: 'Project Created', updated_at: now }).eq('id', lead.id);
+      await logActivity('Converted lead to client', lead.business_name);
+      await loadLeads();
+    } catch (err) {
+      console.error('Convert lead error:', err);
+      alert('Could not convert this lead — check the console for details.');
+    } finally {
+      setConverting(null);
+    }
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const openLeads = leads.filter(l => OPEN_STAGES.includes(l.stage));
+  const needsFollowUp = openLeads.filter(l => l.follow_up_date && l.follow_up_date <= today);
+  const proposalOut = openLeads.filter(l => PROPOSAL_STAGES.includes(l.stage));
+  const won = openLeads.filter(l => l.stage === 'Agreement Signed');
+
+  const tabs: { key: FilterKey; label: string; rows: Lead[] }[] = [
+    { key: 'all', label: 'All stages', rows: openLeads },
+    { key: 'followup', label: 'Needs follow-up', rows: needsFollowUp },
+    { key: 'proposal', label: 'Proposal out', rows: proposalOut },
+    { key: 'won', label: 'Won', rows: won },
+  ];
+
+  const tabRows = tabs.find(t => t.key === filter)?.rows ?? openLeads;
+  const filtered = search
+    ? tabRows.filter(l =>
+        l.business_name.toLowerCase().includes(search.toLowerCase()) ||
+        (l.contact_name ?? '').toLowerCase().includes(search.toLowerCase())
+      )
+    : tabRows;
+  const weighted = openLeads.reduce((s, l) => s + (l.estimated_deal_value ?? 0), 0);
 
   function openEdit(lead: Lead) {
     setSelected(lead);
@@ -116,150 +188,183 @@ export default function Leads() {
 
   const set = (k: keyof Lead, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-  const pipelineStages = ACTIVE_STAGES.filter(s =>
-    filtered.some(l => l.stage === s) || true
-  ).slice(0, 6);
+  const fmt = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toLocaleString()}`;
 
   return (
-    <div className="flex-1 flex flex-col">
-      <Header
+    <>
+      <TitleBand
+        breadcrumb="Pipeline / Leads"
         title="Leads"
-        subtitle={`${leads.length} total`}
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setViewMode(v => v === 'list' ? 'pipeline' : 'list')}
-              className="btn-secondary py-1.5 px-3 text-xs"
-            >
-              {viewMode === 'list' ? 'Pipeline View' : 'List View'}
-            </button>
-            <button onClick={openNew} className="btn-primary py-1.5 px-3 text-xs">
-              <Plus size={14} /> Add Lead
-            </button>
-          </div>
-        }
+        stats={[
+          { label: 'Open', value: openLeads.length.toString() },
+          { label: 'Weighted', value: fmt(weighted) },
+        ]}
+        actionLabel="Add lead"
+        onAction={openNew}
       />
 
-      <div className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
-        {/* Filters */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex-1 max-w-xs">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-400" />
-            <input
-              className="form-input pl-9 py-1.5 text-xs"
-              placeholder="Search leads..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Filter size={13} className="text-navy-400" />
-            <select
-              className="form-select py-1.5 text-xs w-44"
-              value={stageFilter}
-              onChange={e => setStageFilter(e.target.value)}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {/* Filter tabs */}
+        <div className="flex-shrink-0 flex items-center gap-6 px-7 border-b border-ledger-hairline bg-white">
+          {tabs.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setFilter(tab.key)}
+              className={`relative py-3 font-plexMono text-[10px] uppercase tracking-[0.12em] transition-colors ${
+                filter === tab.key ? 'text-ledger-navy' : 'text-ledger-muted hover:text-ledger-navy'
+              }`}
             >
-              <option value="all">All Stages</option>
-              {ALL_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
+              {tab.label} {tab.rows.length}
+              {filter === tab.key && <span className="absolute left-0 right-0 -bottom-px h-[2px] bg-ledger-crimson" />}
+            </button>
+          ))}
+
+          <div className="flex-1" />
+
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search leads…"
+            className="w-40 bg-transparent font-plexSans text-[12px] text-ledger-navy placeholder-ledger-muted border-b border-transparent focus:border-ledger-navy focus:outline-none py-3"
+          />
+
+          <button
+            onClick={() => setViewMode(v => v === 'list' ? 'pipeline' : 'list')}
+            className="font-plexMono text-[9px] uppercase tracking-[0.1em] text-ledger-faint hover:text-ledger-navy transition-colors whitespace-nowrap"
+          >
+            {viewMode === 'list' ? 'Pipeline view' : 'List view'}
+          </button>
         </div>
 
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center text-navy-400 text-sm">Loading leads...</div>
-        ) : viewMode === 'pipeline' ? (
-          /* Pipeline View */
-          <div className="flex gap-4 overflow-x-auto pb-4">
-            {ACTIVE_STAGES.map(stage => {
-              const stageLeads = filtered.filter(l => l.stage === stage);
-              const badge = getLeadStageBadge(stage);
-              return (
-                <div key={stage} className="flex-shrink-0 w-64">
-                  <div className="flex items-center justify-between mb-2.5 px-1">
-                    <div className="flex items-center gap-2">
-                      <Badge label={stage} variant={badge.variant} size="xs" />
-                    </div>
-                    <span className="text-xs font-semibold text-navy-500">{stageLeads.length}</span>
-                  </div>
-                  <div className="space-y-2">
-                    {stageLeads.map(lead => (
-                      <div key={lead.id} className="card p-3 cursor-pointer hover:shadow-card-hover transition-all" onClick={() => openDetail(lead)}>
-                        <div className="font-medium text-sm text-navy-800 mb-1 truncate">{lead.business_name}</div>
-                        {lead.contact_name && <div className="text-xs text-navy-400 truncate">{lead.contact_name}</div>}
-                        {lead.estimated_deal_value && (
-                          <div className="text-xs font-semibold text-emerald-700 mt-1">${lead.estimated_deal_value.toLocaleString()}</div>
-                        )}
-                        {lead.follow_up_date && (
-                          <div className="text-2xs text-navy-400 mt-1 flex items-center gap-1">
-                            <Calendar size={10} />Follow up: {lead.follow_up_date}
-                          </div>
-                        )}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-48 text-ledger-muted font-plexMono text-xs uppercase tracking-widest">
+              Loading…
+            </div>
+          ) : viewMode === 'pipeline' ? (
+            <div className="flex gap-4 overflow-x-auto p-6">
+              {ACTIVE_STAGES.map(stage => {
+                const stageLeads = filtered.filter(l => l.stage === stage);
+                const dot = STAGE_DOT[stage] ?? STAGE_DOT['New Lead'];
+                return (
+                  <div key={stage} className="flex-shrink-0 w-64">
+                    <div className="flex items-center justify-between mb-2.5 px-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${dot.dot}`} />
+                        <span className={`font-plexMono text-[9px] uppercase tracking-[0.1em] ${dot.text}`}>{stage}</span>
                       </div>
-                    ))}
+                      <span className="font-plexMono text-[10px] text-ledger-muted">{stageLeads.length}</span>
+                    </div>
+                    <div className="space-y-2">
+                      {stageLeads.map(lead => (
+                        <div
+                          key={lead.id}
+                          className="bg-white border border-ledger-hairline2 p-3 cursor-pointer hover:bg-ledger-rowHover transition-colors"
+                          onClick={() => openDetail(lead)}
+                        >
+                          <div className="font-plexSans text-[12px] font-medium text-ledger-navy truncate">{lead.business_name}</div>
+                          {lead.contact_name && <div className="font-plexMono text-[10px] text-ledger-muted truncate mt-0.5">{lead.contact_name}</div>}
+                          {lead.estimated_deal_value && (
+                            <div className="font-plexMono text-[11px] font-medium text-ledger-green mt-1.5 tabular-nums">{fmt(lead.estimated_deal_value)}</div>
+                          )}
+                          {lead.follow_up_date && (
+                            <div className="font-plexMono text-[9px] text-ledger-muted mt-1 flex items-center gap-1">
+                              <Calendar size={10} />{lead.follow_up_date}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          /* List View */
-          <div className="card overflow-hidden">
-            <table className="w-full">
+                );
+              })}
+            </div>
+          ) : (
+            <table className="w-full border-collapse">
               <thead>
-                <tr>
-                  <th className="table-header">Business</th>
-                  <th className="table-header">Contact</th>
-                  <th className="table-header">Opportunity</th>
-                  <th className="table-header">Stage</th>
-                  <th className="table-header">Value</th>
-                  <th className="table-header">Follow Up</th>
-                  <th className="table-header w-10"></th>
+                <tr className="border-b border-ledger-hairline">
+                  {['Business', 'Contact', 'Opportunity', 'Stage', 'Value', 'Follow up', ''].map((h, i) => (
+                    <th
+                      key={h || i}
+                      className={`px-4 py-2.5 font-plexMono text-[9px] uppercase tracking-[0.12em] text-ledger-muted font-medium ${
+                        i === 4 || i === 5 ? 'text-right' : 'text-left'
+                      }`}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="table-cell text-center text-navy-400 py-12">No leads found</td>
+                    <td colSpan={7} className="text-center py-16 font-plexMono text-[10px] uppercase tracking-[0.14em] text-ledger-muted">
+                      No leads match this filter
+                    </td>
                   </tr>
-                ) : filtered.map(lead => {
-                  const badge = getLeadStageBadge(lead.stage);
+                ) : filtered.map((lead, idx) => {
+                  const dot = STAGE_DOT[lead.stage] ?? STAGE_DOT['New Lead'];
+                  const isWon = lead.stage === 'Agreement Signed';
+                  const isOverdue = !!lead.follow_up_date && lead.follow_up_date < today;
                   return (
-                    <tr key={lead.id} className="hover:bg-surface-50 transition-colors cursor-pointer" onClick={() => openDetail(lead)}>
-                      <td className="table-cell">
-                        <div className="font-medium text-navy-800">{lead.business_name}</div>
-                        {lead.industry && <div className="text-xs text-navy-400">{lead.industry}</div>}
+                    <tr
+                      key={lead.id}
+                      onClick={() => openDetail(lead)}
+                      className={`cursor-pointer border-b border-ledger-hairline2 last:border-b-0 hover:bg-ledger-rowHover transition-colors ${
+                        isOverdue ? 'border-l-[3px] border-l-ledger-crimson bg-white' :
+                        isWon ? 'border-l-[3px] border-l-ledger-green bg-white' :
+                        `border-l-[3px] border-l-transparent ${idx % 2 === 1 ? 'bg-ledger-zebra' : 'bg-white'}`
+                      }`}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="font-plexSans text-[13px] font-medium text-ledger-navy">{lead.business_name}</div>
+                        {lead.industry && (
+                          <div className="font-plexMono text-[9px] uppercase tracking-[0.08em] text-ledger-muted mt-0.5">{lead.industry}</div>
+                        )}
                       </td>
-                      <td className="table-cell">
-                        <div className="text-navy-700">{lead.contact_name ?? '—'}</div>
-                        {lead.email && <div className="text-xs text-navy-400">{lead.email}</div>}
+                      <td className="px-4 py-3">
+                        <div className="font-plexSans text-[12px] text-ledger-body">{lead.contact_name ?? '—'}</div>
+                        {lead.email && <div className="font-plexMono text-[10px] text-ledger-muted mt-0.5">{lead.email}</div>}
                       </td>
-                      <td className="table-cell">
-                        <div className="text-sm text-navy-600 max-w-xs truncate">{lead.opportunity_type ?? '—'}</div>
+                      <td className="px-4 py-3">
+                        <div className="font-plexSans text-[12px] text-ledger-mid max-w-xs truncate">{lead.opportunity_type ?? '—'}</div>
                       </td>
-                      <td className="table-cell">
-                        <Badge label={badge.label} variant={badge.variant} />
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot.dot}`} />
+                          <span className={`font-plexMono text-[10px] uppercase tracking-[0.08em] ${dot.text}`}>{lead.stage}</span>
+                        </div>
                       </td>
-                      <td className="table-cell">
-                        {lead.estimated_deal_value ? (
-                          <span className="font-semibold text-emerald-700">${lead.estimated_deal_value.toLocaleString()}</span>
-                        ) : '—'}
+                      <td className="px-4 py-3 text-right">
+                        <span className="font-plexMono text-[12px] font-medium text-ledger-navy tabular-nums">
+                          {lead.estimated_deal_value ? fmt(lead.estimated_deal_value) : '—'}
+                        </span>
                       </td>
-                      <td className="table-cell text-xs text-navy-500">{lead.follow_up_date ?? '—'}</td>
-                      <td className="table-cell">
-                        <button
-                          onClick={e => { e.stopPropagation(); openEdit(lead); }}
-                          className="text-navy-400 hover:text-navy-700 transition-colors"
-                        >
-                          <ChevronRight size={15} />
-                        </button>
+                      <td className="px-4 py-3 text-right">
+                        <span className={`font-plexMono text-[10px] tabular-nums ${isOverdue ? 'text-ledger-crimson' : 'text-ledger-faint'}`}>
+                          {lead.follow_up_date ?? '—'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {isWon ? (
+                          <button
+                            onClick={e => { e.stopPropagation(); convertLead(lead); }}
+                            disabled={converting === lead.id}
+                            className="font-plexMono text-[9px] uppercase tracking-[0.1em] bg-ledger-navy text-white px-3 py-1.5 hover:bg-ledger-navyHover transition-colors disabled:opacity-50"
+                          >
+                            {converting === lead.id ? 'Converting…' : 'Convert'}
+                          </button>
+                        ) : (
+                          <ArrowRight size={13} className="text-ledger-muted inline-block" />
+                        )}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Lead Detail Modal */}
@@ -460,6 +565,6 @@ export default function Leads() {
           </div>
         </div>
       </Modal>
-    </div>
+    </>
   );
 }

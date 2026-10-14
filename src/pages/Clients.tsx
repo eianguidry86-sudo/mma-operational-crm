@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Client, Project, Invoice, Communication, Document } from '../types';
-import Header from '../components/layout/Header';
+import TitleBand from '../components/ledger/TitleBand';
 import Modal from '../components/ui/Modal';
 import Badge from '../components/ui/Badge';
 import { getInvoiceStatusBadge, getProjectStatusBadge } from '../components/ui/Badge';
 import {
-  Plus, Search, Building2, Mail, Phone, Globe, ChevronRight,
+  Building2, ArrowRight,
   DollarSign, FolderKanban, MessageSquare, FileText, TrendingUp, PieChart
 } from 'lucide-react';
 import CsvUploader from '../components/CsvUploader';
@@ -35,13 +35,36 @@ export default function Clients() {
   const [newNote, setNewNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
   const [csvData, setCsvData] = useState<any[] | null>(null);
+  const [aggregates, setAggregates] = useState<Record<string, { projects: number; openAR: number; touchedAt: string | null }>>({});
 
   useEffect(() => { loadClients(); }, []);
 
   async function loadClients() {
     setLoading(true);
-    const { data } = await supabase.from('clients').select('*').order('business_name');
+    const [{ data }, { data: allProjects }, { data: allInvoices }] = await Promise.all([
+      supabase.from('clients').select('*').order('business_name'),
+      supabase.from('projects').select('id, client_id, updated_at'),
+      supabase.from('invoices').select('client_id, amount, status, updated_at'),
+    ]);
     setClients(data ?? []);
+
+    const agg: Record<string, { projects: number; openAR: number; touchedAt: string | null }> = {};
+    (data ?? []).forEach(c => { agg[c.id] = { projects: 0, openAR: 0, touchedAt: c.updated_at ?? null }; });
+    (allProjects ?? []).forEach(p => {
+      if (!agg[p.client_id]) return;
+      agg[p.client_id].projects += 1;
+      if (p.updated_at && (!agg[p.client_id].touchedAt || p.updated_at > agg[p.client_id].touchedAt!)) {
+        agg[p.client_id].touchedAt = p.updated_at;
+      }
+    });
+    (allInvoices ?? []).forEach(i => {
+      if (!agg[i.client_id]) return;
+      if (['Sent', 'Overdue'].includes(i.status)) agg[i.client_id].openAR += i.amount ?? 0;
+      if (i.updated_at && (!agg[i.client_id].touchedAt || i.updated_at > agg[i.client_id].touchedAt!)) {
+        agg[i.client_id].touchedAt = i.updated_at;
+      }
+    });
+    setAggregates(agg);
     setLoading(false);
   }
 
@@ -199,11 +222,18 @@ export default function Clients() {
 
   const set = (k: keyof Client, v: any) => setForm(f => ({ ...f, [k]: v }));
 
-  const filtered = clients.filter(c =>
-    !search ||
-    c.business_name.toLowerCase().includes(search.toLowerCase()) ||
-    (c.contact_name ?? '').toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = clients
+    .filter(c =>
+      !search ||
+      c.business_name.toLowerCase().includes(search.toLowerCase()) ||
+      (c.contact_name ?? '').toLowerCase().includes(search.toLowerCase())
+    )
+    .sort((a, b) => (b.lifetime_value ?? 0) - (a.lifetime_value ?? 0));
+
+  const activeCount = clients.filter(c => c.status === 'Active').length;
+  const totalLifetimeValue = clients.reduce((s, c) => s + (c.lifetime_value ?? 0), 0);
+
+  const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 
   const totalRevenue = clientInvoices.filter(i => i.status === 'Paid').reduce((s, i) => s + i.amount, 0);
   const outstanding = clientInvoices.filter(i => ['Sent', 'Overdue'].includes(i.status)).reduce((s, i) => s + i.amount, 0);
@@ -227,76 +257,89 @@ export default function Clients() {
     return `${Math.floor(hrs / 24)}d ago`;
   };
 
+  const fmt = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toLocaleString()}`;
+
   return (
-    <div className="flex-1 flex flex-col">
-      <Header
-        title="Clients"
-        subtitle={`${clients.filter(c => c.status === 'Active').length} active`}
-        actions={
-          <button onClick={openNew} className="btn-primary py-1.5 px-3 text-xs">
-            <Plus size={14} /> Add Client
-          </button>
-        }
+    <>
+      <TitleBand
+        breadcrumb="Pipeline / Accounts"
+        title="Accounts"
+        stats={[
+          { label: 'Active', value: activeCount.toString() },
+          { label: 'Lifetime value', value: fmt(totalLifetimeValue) },
+        ]}
+        actionLabel="Add account"
+        onAction={openNew}
       />
 
-      <div className="flex-1 p-6 flex flex-col gap-4 overflow-y-auto">
-        <div className="relative max-w-xs">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-navy-400" />
-          <input className="form-input pl-9 py-1.5 text-xs" placeholder="Search clients..." value={search} onChange={e => setSearch(e.target.value)} />
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-shrink-0 flex items-center justify-between px-7 py-2.5 border-b border-ledger-hairline bg-white">
+          <span className="font-plexMono text-[9px] uppercase tracking-[0.14em] text-ledger-muted">Ranked by lifetime value</span>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search accounts…"
+            className="w-48 bg-transparent font-plexSans text-[12px] text-ledger-navy placeholder-ledger-muted border-b border-transparent focus:border-ledger-navy focus:outline-none py-1"
+          />
         </div>
 
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center text-navy-400 text-sm">Loading clients...</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filtered.length === 0 ? (
-              <div className="col-span-3 text-center py-16 text-navy-400">No clients found</div>
-            ) : filtered.map(client => (
-              <div
-                key={client.id}
-                className="card p-5 cursor-pointer hover:shadow-card-hover transition-all group"
-                onClick={() => openDetail(client)}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-navy-100 flex items-center justify-center flex-shrink-0">
-                    <Building2 size={18} className="text-navy-600" />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-48 text-ledger-muted font-plexMono text-xs uppercase tracking-widest">
+              Loading…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-16 font-plexMono text-[10px] uppercase tracking-[0.14em] text-ledger-muted">
+              No accounts found
+            </div>
+          ) : (
+            filtered.map((client, idx) => {
+              const agg = aggregates[client.id] ?? { projects: 0, openAR: 0, touchedAt: null };
+              return (
+                <div
+                  key={client.id}
+                  onClick={() => openDetail(client)}
+                  className={`flex items-center gap-5 px-7 py-4 border-b border-ledger-hairline2 last:border-b-0 cursor-pointer hover:bg-ledger-rowHover transition-colors ${
+                    idx % 2 === 1 ? 'bg-ledger-zebra' : 'bg-white'
+                  }`}
+                >
+                  <span className="w-9 flex-shrink-0 font-serifLedger text-[26px] text-ledger-muted text-right tabular-nums">
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <span className="w-9 h-9 flex-shrink-0 flex items-center justify-center bg-ledger-navy/5 border border-ledger-hairline font-plexMono text-[10px] font-medium text-ledger-navy">
+                    {initials(client.business_name)}
+                  </span>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="font-serifLedger text-[21px] leading-tight text-ledger-navy truncate">{client.business_name}</div>
+                    <div className="font-plexMono text-[10px] uppercase tracking-[0.08em] text-ledger-muted mt-0.5 truncate">
+                      {[client.contact_name, client.industry, agg.touchedAt ? `touched ${timeAgo(agg.touchedAt)}` : null]
+                        .filter(Boolean).join(' · ')}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-2xs font-semibold px-2 py-0.5 rounded-full ${
-                      client.status === 'Active' ? 'bg-emerald-100 text-emerald-700' : 'bg-surface-200 text-navy-500'
-                    }`}>{client.status}</span>
-                    <ChevronRight size={14} className="text-surface-400 group-hover:text-navy-500 transition-colors" />
+
+                  <div className="flex items-center gap-8 flex-shrink-0">
+                    <div className="text-right">
+                      <div className="font-plexMono text-[9px] uppercase tracking-[0.1em] text-ledger-muted mb-0.5">Lifetime</div>
+                      <div className="font-plexMono text-[13px] font-medium text-ledger-navy tabular-nums">{fmt(client.lifetime_value ?? 0)}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-plexMono text-[9px] uppercase tracking-[0.1em] text-ledger-muted mb-0.5">Projects</div>
+                      <div className="font-plexMono text-[13px] font-medium text-ledger-navy tabular-nums">{agg.projects}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-plexMono text-[9px] uppercase tracking-[0.1em] text-ledger-muted mb-0.5">Open AR</div>
+                      <div className={`font-plexMono text-[13px] font-medium tabular-nums ${agg.openAR > 0 ? 'text-ledger-crimson' : 'text-ledger-navy'}`}>
+                        {fmt(agg.openAR)}
+                      </div>
+                    </div>
+                    <ArrowRight size={13} className="text-ledger-muted" />
                   </div>
                 </div>
-                <h3 className="font-semibold text-navy-900 mb-0.5 truncate">{client.business_name}</h3>
-                {client.contact_name && <p className="text-xs text-navy-400 mb-3">{client.contact_name}</p>}
-                <div className="space-y-1">
-                  {client.email && (
-                    <div className="flex items-center gap-1.5 text-xs text-navy-500">
-                      <Mail size={11} /> <span className="truncate">{client.email}</span>
-                    </div>
-                  )}
-                  {client.phone && (
-                    <div className="flex items-center gap-1.5 text-xs text-navy-500">
-                      <Phone size={11} /> {client.phone}
-                    </div>
-                  )}
-                  {client.industry && (
-                    <div className="flex items-center gap-1.5 text-xs text-navy-400">
-                      <Globe size={11} /> {client.industry}
-                    </div>
-                  )}
-                </div>
-                {client.lifetime_value > 0 && (
-                  <div className="mt-3 pt-3 border-t border-surface-100 flex items-center justify-between">
-                    <span className="text-2xs text-navy-400">Lifetime Value</span>
-                    <span className="text-sm font-bold text-emerald-700">${client.lifetime_value.toLocaleString()}</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+              );
+            })
+          )}
+        </div>
       </div>
 
       {/* Client Detail Modal */}
@@ -615,6 +658,6 @@ export default function Clients() {
             </div>
           </div>
       </Modal>
-    </div>
+    </>
   );
 }

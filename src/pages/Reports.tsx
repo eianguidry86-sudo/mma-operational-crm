@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import Header from '../components/layout/Header';
-import { FileText, Download, TrendingUp, Users, FolderKanban, Receipt } from 'lucide-react';
+import TitleBand from '../components/ledger/TitleBand';
+import { Users, FolderKanban, TrendingUp, Receipt, Download, Printer } from 'lucide-react';
+import { Client, Project, Invoice, DataChecklist } from '../types';
 
 interface ReportSummary {
   activeClients: number;
@@ -18,12 +19,28 @@ interface ReportSummary {
   overdueTasks: number;
 }
 
+interface ClientReportData {
+  client: Client;
+  projects: Project[];
+  invoices: Invoice[];
+}
+
+const checklistProgress = (checklist: DataChecklist) => {
+  const vals = Object.values(checklist ?? {});
+  return { done: vals.filter(Boolean).length, total: vals.length || 7 };
+};
+
 export default function Reports() {
   const [summary, setSummary] = useState<ReportSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [generatingExport, setGeneratingExport] = useState(false);
 
-  useEffect(() => { loadSummary(); }, []);
+  const [clientList, setClientList] = useState<{ id: string; business_name: string }[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [clientReport, setClientReport] = useState<ClientReportData | null>(null);
+  const [clientLoading, setClientLoading] = useState(false);
+
+  useEffect(() => { loadSummary(); loadClientList(); }, []);
 
   async function loadSummary() {
     setLoading(true);
@@ -75,6 +92,31 @@ export default function Reports() {
     }
   }
 
+  async function loadClientList() {
+    const { data } = await supabase.from('clients').select('id, business_name').order('business_name');
+    setClientList(data ?? []);
+  }
+
+  async function loadClientReport(clientId: string) {
+    setSelectedClientId(clientId);
+    if (!clientId) { setClientReport(null); return; }
+    setClientLoading(true);
+    try {
+      const [{ data: client }, { data: projects }, { data: invoices }] = await Promise.all([
+        supabase.from('clients').select('*').eq('id', clientId).single(),
+        supabase.from('projects').select('*').eq('client_id', clientId).order('created_at', { ascending: false }),
+        supabase.from('invoices').select('*, projects(project_name)').eq('client_id', clientId).order('created_at', { ascending: false }),
+      ]);
+      if (client) {
+        setClientReport({ client, projects: projects ?? [], invoices: invoices ?? [] });
+      } else {
+        setClientReport(null);
+      }
+    } finally {
+      setClientLoading(false);
+    }
+  }
+
   async function exportCSV(type: string) {
     setGeneratingExport(true);
     try {
@@ -113,12 +155,38 @@ export default function Reports() {
     }
   }
 
+  function exportClientReportCSV() {
+    if (!clientReport) return;
+    const { client, projects, invoices } = clientReport;
+    const lines: string[] = [];
+    lines.push('MarketMap Analytics — Client Report');
+    lines.push(`Client,${JSON.stringify(client.business_name)}`);
+    lines.push(`Prepared,${new Date().toISOString().split('T')[0]}`);
+    lines.push('');
+    lines.push('Projects');
+    lines.push('Project,Service Type,Status,Data Readiness,Due Date,Delivery Date');
+    projects.forEach(p => {
+      const prog = checklistProgress(p.data_checklist);
+      lines.push([p.project_name, p.service_type ?? '', p.status, `${prog.done}/${prog.total}`, p.due_date ?? '', p.delivery_date ?? ''].map(v => JSON.stringify(v)).join(','));
+    });
+    lines.push('');
+    lines.push('Invoices');
+    lines.push('Invoice #,Amount,Status,Due Date,Payment Date');
+    invoices.forEach(i => {
+      lines.push([i.invoice_number, i.amount, i.status, i.due_date ?? '', i.payment_date ?? ''].map(v => JSON.stringify(v)).join(','));
+    });
+    const csv = lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `marketmap-${client.business_name.toLowerCase().replace(/\s+/g, '-')}-report.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const sections = summary ? [
     {
       title: 'Client Report',
       icon: Users,
-      color: 'text-navy-700',
-      bg: 'bg-navy-50',
       metrics: [
         { label: 'Active Clients', value: summary.activeClients },
         { label: 'New This Month', value: summary.newClientsThisMonth },
@@ -127,8 +195,6 @@ export default function Reports() {
     {
       title: 'Project Report',
       icon: FolderKanban,
-      color: 'text-blue-700',
-      bg: 'bg-blue-50',
       metrics: [
         { label: 'Active Projects', value: summary.activeProjects },
         { label: 'Completed This Month', value: summary.completedProjectsThisMonth },
@@ -137,8 +203,6 @@ export default function Reports() {
     {
       title: 'Sales Report',
       icon: TrendingUp,
-      color: 'text-orange-700',
-      bg: 'bg-orange-50',
       metrics: [
         { label: 'Open Leads', value: summary.openLeads },
         { label: 'Pipeline Value', value: `$${summary.pipelineValue.toLocaleString()}` },
@@ -147,8 +211,6 @@ export default function Reports() {
     {
       title: 'Revenue Report',
       icon: Receipt,
-      color: 'text-emerald-700',
-      bg: 'bg-emerald-50',
       metrics: [
         { label: 'Revenue This Month', value: `$${summary.revenueThisMonth.toLocaleString()}` },
         { label: 'Revenue YTD', value: `$${summary.revenueYTD.toLocaleString()}` },
@@ -165,61 +227,224 @@ export default function Reports() {
     { label: 'Export Invoices', type: 'invoices', icon: Receipt },
   ];
 
+  const totalPaid = clientReport ? clientReport.invoices.filter(i => i.status === 'Paid').reduce((s, i) => s + i.amount, 0) : 0;
+  const totalOutstanding = clientReport ? clientReport.invoices.filter(i => ['Sent', 'Overdue'].includes(i.status)).reduce((s, i) => s + i.amount, 0) : 0;
+  const activeProjectCount = clientReport ? clientReport.projects.filter(p => p.status !== 'Completed').length : 0;
+  const completedProjectCount = clientReport ? clientReport.projects.filter(p => p.status === 'Completed').length : 0;
+
   return (
-    <div className="flex-1 flex flex-col">
-      <Header title="Reports" subtitle="Operational summaries & exports" />
-      <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+    <>
+      <TitleBand
+        breadcrumb="Workspace / Reports"
+        title="Reports"
+        stats={summary ? [
+          { label: 'Revenue YTD', value: `$${summary.revenueYTD.toLocaleString()}` },
+          { label: 'Pipeline', value: `$${summary.pipelineValue.toLocaleString()}` },
+        ] : []}
+      />
+
+      <div className="flex-1 flex flex-col gap-9 px-8 py-6 overflow-y-auto">
         {loading ? (
-          <div className="flex-1 flex items-center justify-center text-navy-400 text-sm">Generating report...</div>
+          <div className="flex-1 flex items-center justify-center text-ledger-soft font-plexSans text-sm">Generating report…</div>
         ) : (
           <>
-            {/* Report Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {sections.map(section => (
-                <div key={section.title} className="card p-5">
-                  <div className="flex items-center gap-2.5 mb-4">
-                    <div className={`w-8 h-8 rounded-lg ${section.bg} flex items-center justify-center`}>
-                      <section.icon size={16} className={section.color} />
+            {/* Operational summary */}
+            <section>
+              <div className="mb-3 font-plexMono text-[10px] uppercase tracking-wider text-ledger-soft">Operational Summary</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-ledger-hairline border border-ledger-hairline">
+                {sections.map(section => (
+                  <div key={section.title} className="bg-white p-5">
+                    <div className="flex items-center gap-2 mb-4">
+                      <section.icon size={14} className="text-ledger-navy" />
+                      <h3 className="font-plexMono text-[11px] uppercase tracking-wide text-ledger-navy">{section.title}</h3>
                     </div>
-                    <h3 className="text-sm font-semibold text-navy-900">{section.title}</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      {section.metrics.map(m => (
+                        <div key={m.label}>
+                          <div className="font-plexMono text-xl font-medium text-ledger-navy tabular-nums">{m.value}</div>
+                          <div className="font-plexSans text-[11px] text-ledger-muted mt-0.5">{m.label}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    {section.metrics.map(m => (
-                      <div key={m.label} className="bg-surface-50 rounded-lg p-3">
-                        <div className="text-xl font-bold text-navy-900">{m.value}</div>
-                        <div className="text-xs text-navy-400 mt-0.5">{m.label}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Data Exports */}
-            <div className="card p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <Download size={15} className="text-navy-600" />
-                <h3 className="text-sm font-semibold text-navy-900">Export Data</h3>
+                ))}
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            </section>
+
+            {/* Raw data exports */}
+            <section>
+              <div className="mb-3 font-plexMono text-[10px] uppercase tracking-wider text-ledger-soft">Data Exports</div>
+              <div className="flex flex-wrap gap-3">
                 {exports.map(exp => (
                   <button
                     key={exp.type}
                     onClick={() => exportCSV(exp.type)}
                     disabled={generatingExport}
-                    className="flex items-center gap-2.5 px-4 py-3 rounded-lg border border-surface-300 hover:border-navy-400 hover:bg-navy-50 transition-all text-sm text-navy-700 font-medium"
+                    className="flex items-center gap-2 border border-ledger-hairline px-4 py-2.5 hover:border-ledger-navy hover:bg-ledger-rowHover transition-colors font-plexMono text-[11px] uppercase tracking-wide text-ledger-body disabled:opacity-50"
                   >
-                    <exp.icon size={15} className="text-navy-500" />
-                    <span className="text-xs">{exp.label}</span>
-                    <Download size={12} className="text-navy-400 ml-auto" />
+                    <exp.icon size={13} className="text-ledger-soft" />
+                    {exp.label}
+                    <Download size={12} className="text-ledger-faint" />
                   </button>
                 ))}
               </div>
-              <p className="text-2xs text-navy-400 mt-3">CSV format — compatible with Excel and Google Sheets</p>
-            </div>
+              <p className="font-plexSans text-[11px] text-ledger-faint mt-2">CSV format — compatible with Excel and Google Sheets</p>
+            </section>
+
+            {/* Client-facing report generator */}
+            <section className="border-t border-ledger-hairline pt-7">
+              <div className="flex items-end justify-between gap-6 flex-wrap mb-5">
+                <div>
+                  <div className="font-plexMono text-[10px] uppercase tracking-wider text-ledger-soft mb-1">Client-Facing Report</div>
+                  <h2 className="font-serifLedger text-[26px] leading-none text-ledger-navy">Generate a report</h2>
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    className="border-b border-ledger-hairline bg-transparent py-1.5 pr-6 font-plexSans text-sm text-ledger-body focus:outline-none focus:border-ledger-navy"
+                    value={selectedClientId}
+                    onChange={e => loadClientReport(e.target.value)}
+                  >
+                    <option value="">Select a client…</option>
+                    {clientList.map(c => <option key={c.id} value={c.id}>{c.business_name}</option>)}
+                  </select>
+                  {clientReport && (
+                    <>
+                      <button
+                        onClick={exportClientReportCSV}
+                        className="flex items-center gap-1.5 border border-ledger-hairline px-3 py-2 hover:border-ledger-navy hover:bg-ledger-rowHover transition-colors font-plexMono text-[11px] uppercase tracking-wide text-ledger-body"
+                      >
+                        <Download size={13} /> CSV
+                      </button>
+                      <button
+                        onClick={() => window.print()}
+                        className="flex items-center gap-1.5 bg-ledger-navy text-white px-4 py-2 hover:bg-ledger-navyHover transition-colors font-plexMono text-[11px] uppercase tracking-wide"
+                      >
+                        <Printer size={13} /> Print / Save PDF
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {clientLoading ? (
+                <div className="py-16 text-center font-plexSans text-sm text-ledger-faint">Loading client report…</div>
+              ) : !clientReport ? (
+                <div className="py-16 text-center font-plexSans text-sm text-ledger-faint border border-dashed border-ledger-hairline">
+                  Select a client above to generate their report.
+                </div>
+              ) : (
+                <div id="client-report-print" className="border border-ledger-hairline bg-white px-10 py-9 max-w-3xl">
+                  {/* Report letterhead */}
+                  <div className="flex items-start justify-between border-b-2 border-ledger-navy pb-5 mb-6">
+                    <div>
+                      <div className="font-plexMono text-[10px] uppercase tracking-[0.15em] text-ledger-muted mb-2">MarketMap Analytics</div>
+                      <h1 className="font-serifLedger text-[32px] leading-none text-ledger-navy">{clientReport.client.business_name}</h1>
+                      <div className="font-plexSans text-xs text-ledger-mid mt-2">
+                        {[clientReport.client.contact_name, clientReport.client.email, clientReport.client.phone].filter(Boolean).join(' · ') || '—'}
+                      </div>
+                    </div>
+                    <div className="text-right font-plexMono text-[10px] uppercase tracking-wide text-ledger-muted">
+                      Prepared {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </div>
+                  </div>
+
+                  {/* Engagement summary */}
+                  <div className="grid grid-cols-3 gap-6 mb-8">
+                    <div>
+                      <div className="font-plexMono text-[9px] uppercase tracking-wide text-ledger-muted mb-1">Active Projects</div>
+                      <div className="font-plexMono text-2xl font-medium text-ledger-navy tabular-nums">{activeProjectCount}</div>
+                    </div>
+                    <div>
+                      <div className="font-plexMono text-[9px] uppercase tracking-wide text-ledger-muted mb-1">Completed</div>
+                      <div className="font-plexMono text-2xl font-medium text-ledger-navy tabular-nums">{completedProjectCount}</div>
+                    </div>
+                    <div>
+                      <div className="font-plexMono text-[9px] uppercase tracking-wide text-ledger-muted mb-1">Lifetime Value</div>
+                      <div className="font-plexMono text-2xl font-medium text-ledger-navy tabular-nums">${(clientReport.client.lifetime_value ?? 0).toLocaleString()}</div>
+                    </div>
+                  </div>
+
+                  {/* Project detail */}
+                  <div className="mb-8">
+                    <div className="font-plexMono text-[10px] uppercase tracking-wider text-ledger-soft mb-2">Project Status</div>
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b border-ledger-hairline">
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Project</th>
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Service</th>
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Status</th>
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Data Readiness</th>
+                          <th className="py-2 pl-3 text-right font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Due</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clientReport.projects.length === 0 ? (
+                          <tr><td colSpan={5} className="py-6 text-center font-plexSans text-xs text-ledger-faint">No projects on file</td></tr>
+                        ) : clientReport.projects.map(p => {
+                          const prog = checklistProgress(p.data_checklist);
+                          return (
+                            <tr key={p.id} className="border-b border-ledger-hairline2">
+                              <td className="py-2.5 pr-3 font-plexSans text-xs text-ledger-body">{p.project_name}</td>
+                              <td className="py-2.5 pr-3 font-plexSans text-xs text-ledger-mid">{p.service_type ?? '—'}</td>
+                              <td className="py-2.5 pr-3 font-plexSans text-xs text-ledger-mid">{p.status}</td>
+                              <td className="py-2.5 pr-3 font-plexMono text-xs text-ledger-mid tabular-nums">{prog.done}/{prog.total}</td>
+                              <td className="py-2.5 pl-3 text-right font-plexSans text-xs text-ledger-mid">{p.due_date ?? '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Financial summary */}
+                  <div className="mb-2">
+                    <div className="font-plexMono text-[10px] uppercase tracking-wider text-ledger-soft mb-2">Billing Summary</div>
+                    <div className="flex items-center gap-8 mb-3">
+                      <div>
+                        <div className="font-plexMono text-[9px] uppercase tracking-wide text-ledger-muted mb-1">Paid to Date</div>
+                        <div className="font-plexMono text-lg font-medium text-ledger-green tabular-nums">${totalPaid.toLocaleString()}</div>
+                      </div>
+                      <div>
+                        <div className="font-plexMono text-[9px] uppercase tracking-wide text-ledger-muted mb-1">Outstanding Balance</div>
+                        <div className={`font-plexMono text-lg font-medium tabular-nums ${totalOutstanding > 0 ? 'text-ledger-crimson' : 'text-ledger-navy'}`}>${totalOutstanding.toLocaleString()}</div>
+                      </div>
+                    </div>
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b border-ledger-hairline">
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Invoice #</th>
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Project</th>
+                          <th className="py-2 pr-3 text-right font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Amount</th>
+                          <th className="py-2 pr-3 text-left font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Status</th>
+                          <th className="py-2 pl-3 text-right font-plexMono text-[9px] uppercase tracking-wide text-ledger-soft">Due</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clientReport.invoices.length === 0 ? (
+                          <tr><td colSpan={5} className="py-6 text-center font-plexSans text-xs text-ledger-faint">No invoices on file</td></tr>
+                        ) : clientReport.invoices.map(inv => (
+                          <tr key={inv.id} className="border-b border-ledger-hairline2">
+                            <td className="py-2.5 pr-3 font-plexMono text-xs text-ledger-body">{inv.invoice_number}</td>
+                            <td className="py-2.5 pr-3 font-plexSans text-xs text-ledger-mid">{(inv as any).projects?.project_name ?? '—'}</td>
+                            <td className="py-2.5 pr-3 text-right font-plexMono text-xs text-ledger-body tabular-nums">${inv.amount.toLocaleString()}</td>
+                            <td className="py-2.5 pr-3 font-plexMono text-[10px] uppercase tracking-wide text-ledger-mid">{inv.status}</td>
+                            <td className="py-2.5 pl-3 text-right font-plexSans text-xs text-ledger-mid">{inv.due_date ?? '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-9 pt-4 border-t border-ledger-hairline flex items-center justify-between font-plexMono text-[9px] uppercase tracking-wide text-ledger-faint">
+                    <span>MarketMap Analytics · GIS Small Business Consulting</span>
+                    <span>Confidential — prepared for {clientReport.client.business_name}</span>
+                  </div>
+                </div>
+              )}
+            </section>
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }
