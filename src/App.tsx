@@ -12,9 +12,10 @@ import Analytics from './pages/Analytics';
 import Documents from './pages/Documents';
 import Settings from './pages/Settings';
 import FinancialProjections from './pages/FinancialProjections';
+import MarketIntel from './pages/MarketIntel';
 
 type Page =
-  | 'dashboard' | 'leads' | 'clients' | 'projects' | 'tasks'
+  | 'dashboard' | 'leads' | 'market' | 'clients' | 'projects' | 'tasks'
   | 'billing' | 'data-requests' | 'reports' | 'analytics' | 'documents' | 'settings' | 'projections';
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
     switch (currentPage) {
       case 'dashboard': return <Dashboard onNavigate={p => setCurrentPage(p as Page)} />;
       case 'leads': return <Leads />;
+      case 'market': return <MarketIntel />;
       case 'clients': return <Clients />;
       case 'projects': return <Projects />;
       case 'tasks': return <Tasks />;

@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 
 export type LedgerPage =
-  | 'dashboard' | 'leads' | 'clients' | 'projects' | 'tasks'
+  | 'dashboard' | 'leads' | 'market' | 'clients' | 'projects' | 'tasks'
   | 'billing' | 'data-requests' | 'reports' | 'analytics' | 'documents' | 'settings' | 'projections';
 
 interface NavItem {
@@ -20,6 +20,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Overview' },
   { id: 'leads', label: 'Leads' },
+  { id: 'market', label: 'Market Intel' },
   { id: 'clients', label: 'Accounts' },
   { id: 'projects', label: 'Delivery' },
   { id: 'data-requests', label: 'Data' },
